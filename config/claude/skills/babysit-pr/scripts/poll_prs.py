@@ -83,12 +83,16 @@ def ensure_gh_auth(gh: str) -> None:
         raise RuntimeError(f"GitHub authentication failed: {detail}")
 
 
-def flatten_pages(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    if value and all(isinstance(item, list) for item in value):
-        return [entry for page in value for entry in page if isinstance(entry, dict)]
-    return [entry for entry in value if isinstance(entry, dict)]
+def fetch_pages(gh: str, endpoint: str) -> list[dict[str, Any]]:
+    """Read all feedback with a separate timeout for each 100-item request."""
+    items: list[dict[str, Any]] = []
+    for page in count(1):
+        batch = run_json([gh, "api", f"{endpoint}?per_page=100&page={page}"])
+        if not isinstance(batch, list) or not all(isinstance(item, dict) for item in batch):
+            raise RuntimeError(f"Expected an array of objects from {endpoint}, page {page}")
+        items.extend(batch)
+        if len(batch) < 100:
+            return items
 
 
 def fetch_live(repo: str, number: int) -> dict[str, Any]:
@@ -103,15 +107,11 @@ def fetch_live(repo: str, number: int) -> dict[str, Any]:
     )
     pr = run_json([gh, "pr", "view", str(number), "--repo", repo, "--json", fields])
 
-    def api(endpoint: str) -> list[dict[str, Any]]:
-        pages = run_json([gh, "api", "--paginate", "--slurp", endpoint])
-        return flatten_pages(pages)
-
     return {
         "pr": pr,
-        "issue_comments": api(f"repos/{repo}/issues/{number}/comments?per_page=100"),
-        "review_comments": api(f"repos/{repo}/pulls/{number}/comments?per_page=100"),
-        "reviews": api(f"repos/{repo}/pulls/{number}/reviews?per_page=100"),
+        "issue_comments": fetch_pages(gh, f"repos/{repo}/issues/{number}/comments"),
+        "review_comments": fetch_pages(gh, f"repos/{repo}/pulls/{number}/comments"),
+        "reviews": fetch_pages(gh, f"repos/{repo}/pulls/{number}/reviews"),
     }
 
 
