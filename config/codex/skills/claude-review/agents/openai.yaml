@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude Review"
+  short_description: "Review code and plans through Claude CLI"
+  default_prompt: "Use $claude-review to independently review this code or plan with Claude CLI."

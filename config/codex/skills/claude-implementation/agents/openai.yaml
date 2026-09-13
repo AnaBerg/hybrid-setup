@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude Implementation"
+  short_description: "Implement code through Claude CLI"
+  default_prompt: "Use $claude-implementation to implement this change with Claude CLI and verify the result."

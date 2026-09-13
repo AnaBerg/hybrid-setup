@@ -1,0 +1,4 @@
+interface:
+  display_name: "Learn to Use Claude"
+  short_description: "Learn from Claude runs before changing guidance"
+  default_prompt: "Use $learn-to-use-claude to analyze the latest Claude invocation and propose evidence-backed improvements without applying them."
