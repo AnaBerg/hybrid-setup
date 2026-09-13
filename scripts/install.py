@@ -41,6 +41,13 @@ def reject_symlinks(path: Path) -> None:
     for part in (path, *path.parents):
         if part.is_symlink():
             raise ValueError(f"Symlink paths are not supported: {part}")
+        try:
+            attributes = getattr(part.lstat(), "st_file_attributes", 0)
+        except FileNotFoundError:
+            continue
+        # Python 3.10 lacks Path.is_junction(); reject all Windows reparse points.
+        if attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise ValueError(f"Reparse point paths are not supported: {part}")
 
 
 def overlaps(first: Path, second: Path) -> bool:

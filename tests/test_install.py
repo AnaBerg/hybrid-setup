@@ -80,6 +80,23 @@ class InstallerTests(unittest.TestCase):
         self.assertNotEqual(self.run_install(system="Plan9"), 0)
         self.assertFalse(self.home.exists())
 
+    @unittest.skipUnless(os.name == "nt", "Windows junction integration test")
+    def test_windows_junction_is_rejected_without_external_writes(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        config = self.home / ".codex"
+        config.mkdir(parents=True)
+        junction = config / "skills"
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+                       check=True, capture_output=True, text=True)
+        try:
+            self.assertNotEqual(self.run_install(system="Windows"), 0)
+            self.assertIn("Reparse point", self.stderr.getvalue())
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertFalse((config / "AGENTS.md").exists())
+        finally:
+            junction.rmdir()
+
     def test_idempotence_does_not_create_new_backups(self):
         self.assert_success(self.run_install())
         before = self.tree(self.home)
