@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -13,6 +14,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime, timezone
+from itertools import count
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,6 +24,7 @@ PR_REF = re.compile(r"^([^/]+)/([^#!]+)[#!](\d+)$")
 FAILED = {"FAILURE", "ERROR", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
 CANCELLED = {"CANCELLED"}
 TIMED_OUT = {"TIMED_OUT"}
+GH_TIMEOUT_SECONDS = 30
 
 
 def utc_now() -> str:
@@ -40,8 +43,20 @@ def parse_target(value: str, default_repo: str | None) -> tuple[str, int]:
     raise ValueError(f"Cannot resolve PR target {value!r}; use a GitHub PR URL, owner/repo#number, or --repo with a number")
 
 
+def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            command, check=False, capture_output=True, text=True,
+            timeout=GH_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Command timed out after {GH_TIMEOUT_SECONDS}s: {' '.join(command[:3])}"
+        ) from exc
+
+
 def run_json(command: list[str]) -> Any:
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    result = run_command(command)
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
         raise RuntimeError(f"Command failed: {' '.join(command[:3])}: {detail}")
@@ -62,7 +77,7 @@ def gh_executable() -> str:
 
 
 def ensure_gh_auth(gh: str) -> None:
-    result = subprocess.run([gh, "auth", "status"], check=False, capture_output=True, text=True)
+    result = run_command([gh, "auth", "status"])
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
         raise RuntimeError(f"GitHub authentication failed: {detail}")
@@ -278,15 +293,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("targets", nargs="+", help="PR URLs, owner/repo#numbers, or numbers with --repo")
     parser.add_argument("--repo", help="Default owner/repo for numeric targets")
     parser.add_argument("--state-file", type=Path, required=True, help="Persistent deduplication state")
-    parser.add_argument("--watch", action="store_true", help="Run a bounded polling watch")
+    parser.add_argument("--watch", action="store_true", help="Poll continuously until interrupted")
     parser.add_argument("--interval", type=float, default=60.0, help="Seconds between watch cycles")
-    parser.add_argument("--max-cycles", type=int, default=10, help="Maximum watch cycles")
+    parser.add_argument("--max-cycles", type=int, help="Optionally bound the number of watch cycles")
     parser.add_argument("--fixture", type=Path, help="Read deterministic snapshots instead of calling gh")
     args = parser.parse_args(argv)
-    if args.interval < 0:
-        parser.error("--interval must be non-negative")
-    if not 1 <= args.max_cycles <= 1000:
-        parser.error("--max-cycles must be between 1 and 1000")
+    if not math.isfinite(args.interval) or args.interval < 0:
+        parser.error("--interval must be finite and non-negative")
+    if args.watch and not args.fixture and args.interval == 0:
+        parser.error("--interval must be positive for live watch polling")
+    if args.max_cycles is not None and args.max_cycles < 1:
+        parser.error("--max-cycles must be positive")
     if not args.watch:
         args.max_cycles = 1
     return args
@@ -303,7 +320,8 @@ def main(argv: list[str] | None = None) -> int:
         if not fixture:
             ensure_gh_auth(gh_executable())
         had_errors = False
-        for cycle in range(args.max_cycles):
+        cycles = count() if args.max_cycles is None else range(args.max_cycles)
+        for cycle in cycles:
             event_count = 0
             error_count = 0
             for repo, number in targets:
@@ -327,9 +345,11 @@ def main(argv: list[str] | None = None) -> int:
                 "events": event_count, "errors": error_count,
                 "targets": len(targets), "observed_at": utc_now(),
             }, sort_keys=True), flush=True)
-            if cycle + 1 < args.max_cycles:
+            if args.max_cycles is None or cycle + 1 < args.max_cycles:
                 time.sleep(args.interval)
         return 1 if had_errors else 0
+    except KeyboardInterrupt:
+        return 130
     except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as exc:
         print(json.dumps({"type": "poll_error", "message": str(exc), "observed_at": utc_now()}), file=sys.stderr)
         return 1
