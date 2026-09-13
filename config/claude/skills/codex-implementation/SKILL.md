@@ -36,8 +36,8 @@ After a passing preflight, capture the baseline before dispatch:
 
 ```bash
 git status --short > "$ARTIFACT_DIR/status-before.txt"
-git diff > "$ARTIFACT_DIR/diff-before.patch"
-git diff --cached > "$ARTIFACT_DIR/staged-before.patch"
+git diff --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/diff-before.patch"
+git diff --cached --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/staged-before.patch"
 git ls-files --others -z > "$ARTIFACT_DIR/untracked-before.paths"
 if git rev-parse --verify HEAD > "$ARTIFACT_DIR/head-before.txt" 2>/dev/null; then
   :
@@ -61,8 +61,8 @@ else
   SUPERVISOR_EXIT=$?
 fi
 git status --short > "$ARTIFACT_DIR/status-after.txt"
-git diff > "$ARTIFACT_DIR/diff-after.patch"
-git diff --cached > "$ARTIFACT_DIR/staged-after.patch"
+git diff --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/diff-after.patch"
+git diff --cached --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/staged-after.patch"
 git ls-files --others -z > "$ARTIFACT_DIR/untracked-after.paths"
 if git rev-parse --verify HEAD > "$ARTIFACT_DIR/head-after.txt" 2>/dev/null; then
   :
@@ -72,6 +72,8 @@ fi
 ```
 
 Inspect `SUPERVISOR_EXIT`, the captured before/after state, and the supervisor's `invocation.json`, `stdout.log`, `stderr.log`, and candidate `report.md`. Compare every snapshotted untracked path against its original content hash and metadata, even if it is now tracked, staged or deleted, and inspect newly created files separately. When a mismatch affects unrelated user work, preserve both versions and investigate ownership; do not blindly restore over concurrent user changes.
+
+The tracked patches include binary bytes and bypass external diff/text conversion. To verify recovery, use a separate disposable checkout at the recorded baseline HEAD, apply the staged patch with `git apply --index` first, then apply the worktree patch with `git apply`, and compare both index and worktree contents. Reconstruct an unborn baseline in an empty temporary repository. Never replay these patches over the live workspace or concurrent user changes automatically.
 
 Compare the recorded HEAD values as well as the working-tree diffs. If both are commits and differ, inspect `git log <before>..<after>` and the corresponding commit/tree diffs: a clean worktree may hide changes Codex committed. If the baseline was `UNBORN`, inspect the new history including its root commit and the full resulting tree. Treat rewritten or unexpected history as a discrepancy and inspect it without resetting or force-pushing.
 
