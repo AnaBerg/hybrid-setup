@@ -13,23 +13,44 @@ Do not delegate implementation just to avoid understanding the code yourself. Cl
 
 1. Clarify the implementation target: feature, bugfix, refactor, test update, migration, or plan step
 2. Inspect enough local context to give Codex a precise task and avoid sending it on a broad search
-3. Check the worktree state before running Codex so user changes are not mistaken for Codex changes
-4. Create a temporary artifact directory for the prompt and implementation report
-5. Run Codex with a focused implementation prompt that states allowed files, constraints, expected tests, and reporting requirements
-6. After Codex finishes, inspect the diff and run targeted verification before presenting the result
+3. Inspect the worktree state so user changes are not mistaken for Codex changes
+4. Create the artifact directory, write the focused prompt, assign and register the invocation ID, and atomically initialize `invocation.json` using the shared lifecycle schema before authentication preflight
+5. Record the preflight outcome; dispatch only when it passes, using the supervised command below
+6. Capture the resulting worktree status and diff, inspect the changes and report, perform independent verification, and record verification and cleanup outcomes
+7. After verification, claim and finish the learning hook from existing evidence, then present the implementation result
 
-Use this command shape:
+Read the [Codex invocation lifecycle](../learn-to-use-codex/references/invocation-lifecycle.md) before preparing the invocation. Start with these artifact paths:
 
 ```bash
 ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-implementation.XXXXXX")"
 REPORT="$ARTIFACT_DIR/report.md"
 PROMPT="$ARTIFACT_DIR/prompt.md"
+LIFECYCLE="{{CLAUDE_HOME}}/skills/learn-to-use-codex/scripts/invocation_lifecycle.py"
+```
 
+Write the prompt and initialize the registered invocation record with all lifecycle fields, using `null` for unavailable values. Run and record authentication preflight only after that record exists. A blocked preflight skips execution, records the blocker and verification limitations, and proceeds to the learning hook without claiming implementation success.
+
+After a passing preflight, use this single execution path. Choose `TIMEOUT_SECONDS` and `TIMEOUT_RATIONALE` for the task before dispatch. The conditional captures a nonzero supervisor status without losing the after-state evidence under `set -e`:
+
+```bash
 git status --short > "$ARTIFACT_DIR/status-before.txt"
-codex exec -C "$PWD" - < "$PROMPT" > "$REPORT"
+git diff > "$ARTIFACT_DIR/diff-before.patch"
+git diff --cached > "$ARTIFACT_DIR/staged-before.patch"
+SUPERVISOR_EXIT=0
+if python3 "$LIFECYCLE" supervise \
+  --artifact-dir "$ARTIFACT_DIR" --stdin "$PROMPT" \
+  --timeout "$TIMEOUT_SECONDS" --timeout-rationale "$TIMEOUT_RATIONALE" \
+  -- codex exec -C "$PWD" -; then
+  SUPERVISOR_EXIT=0
+else
+  SUPERVISOR_EXIT=$?
+fi
 git status --short > "$ARTIFACT_DIR/status-after.txt"
 git diff > "$ARTIFACT_DIR/diff-after.patch"
+git diff --cached > "$ARTIFACT_DIR/staged-after.patch"
 ```
+
+Inspect `SUPERVISOR_EXIT`, the captured before/after state, untracked files listed in status, and the supervisor's `invocation.json`, `stdout.log`, `stderr.log`, and candidate `report.md`. Perform the independent checks below and persist `report_validity`, `verification_status`, and `verification_summary` before claiming the learning hook. If execution failed, inspect any partial changes and record what could and could not be verified. Confirm any required descendant cleanup using the shared contract; the supplied supervisor confirms only its original process group, not full-tree containment.
 
 If the implementation should be constrained to specific files, say that explicitly in the prompt. If the repository has user changes already, tell Codex not to overwrite or revert unrelated work.
 
@@ -80,16 +101,9 @@ Run targeted verification whenever practical. If verification fails, either fix 
 
 Every intended Codex invocation from this skill — success, error, timeout, cancellation, empty or malformed report, cleanup failure, or a preflight that blocked the call — uses the shared lifecycle contract and requires exactly one `$learn-to-use-codex` analysis.
 
-Read and follow the canonical [Codex invocation lifecycle](../learn-to-use-codex/references/invocation-lifecycle.md). Before authentication preflight, assign a stable `invocation_id` and create its `invocation.json` record in the artifact directory. Use `../learn-to-use-codex/scripts/invocation_lifecycle.py` to supervise the process, record the outcome atomically, confirm process-tree cleanup, and manage the hook ownership markers:
+The workflow above is the only model execution path in this skill. After its independent verification step (or after recording a blocked preflight and its verification limitations), use the same artifact directory for the learning hook:
 
 ```bash
-LIFECYCLE="{{CLAUDE_HOME}}/skills/learn-to-use-codex/scripts/invocation_lifecycle.py"
-
-python3 "$LIFECYCLE" supervise \
-  --artifact-dir "$ARTIFACT_DIR" --stdin "$PROMPT" \
-  --timeout <bounded seconds> --timeout-rationale "<task-sized reason>" \
-  -- codex exec -C "$PWD" - < "$PROMPT"
-
 HOOK_TOKEN="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 python3 "$LIFECYCLE" hook-claim --artifact-dir "$ARTIFACT_DIR" --deadline <iso8601> \
   --owner-pid "$$" --claim-token "$HOOK_TOKEN"
