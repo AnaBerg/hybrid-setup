@@ -71,10 +71,14 @@ python3 "$LIFECYCLE" supervise \
   --timeout <bounded seconds> --timeout-rationale "<task-sized reason>" \
   -- codex -C "$PWD" - < "$PROMPT"
 
-python3 "$LIFECYCLE" hook-claim --artifact-dir "$ARTIFACT_DIR" --deadline <iso8601>
+HOOK_TOKEN="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+python3 "$LIFECYCLE" hook-claim --artifact-dir "$ARTIFACT_DIR" --deadline <iso8601> \
+  --owner-pid "$$" --claim-token "$HOOK_TOKEN"
+# Continue only on exit 0. Keep this owner shell alive through completion.
+# Exit 2 means busy, 3 means already complete, and 4 means invalid completion.
 # ... run $learn-to-use-codex from existing evidence, writing learning-result.md ...
 python3 "$LIFECYCLE" hook-complete --artifact-dir "$ARTIFACT_DIR" \
-  --result "$ARTIFACT_DIR/learning-result.md" --outcome <class>
+  --result "$ARTIFACT_DIR/learning-result.md" --outcome <class> --claim-token "$HOOK_TOKEN"
 ```
 
 Each retry is a new linked `invocation_id`. Run the hook exactly once per intended invocation, after independent verification. Keep learning output in `learning-result.md`, never appended to the Codex report, and never invoke Codex, another model, a subagent, or `review-loop` to perform the analysis. Hook failure is recorded separately and never changes the Codex result or this skill's reported outcome. Pending learning proposals do not block the original task and are applied only after explicit user approval of the specific proposal.
