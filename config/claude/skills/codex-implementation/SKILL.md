@@ -26,7 +26,7 @@ REPORT="$ARTIFACT_DIR/report.md"
 PROMPT="$ARTIFACT_DIR/prompt.md"
 
 git status --short > "$ARTIFACT_DIR/status-before.txt"
-codex -C "$PWD" - < "$PROMPT" > "$REPORT"
+codex exec -C "$PWD" - < "$PROMPT" > "$REPORT"
 git status --short > "$ARTIFACT_DIR/status-after.txt"
 git diff > "$ARTIFACT_DIR/diff-after.patch"
 ```
@@ -88,7 +88,7 @@ LIFECYCLE="{{CLAUDE_HOME}}/skills/learn-to-use-codex/scripts/invocation_lifecycl
 python3 "$LIFECYCLE" supervise \
   --artifact-dir "$ARTIFACT_DIR" --stdin "$PROMPT" \
   --timeout <bounded seconds> --timeout-rationale "<task-sized reason>" \
-  -- codex -C "$PWD" - < "$PROMPT"
+  -- codex exec -C "$PWD" - < "$PROMPT"
 
 HOOK_TOKEN="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 python3 "$LIFECYCLE" hook-claim --artifact-dir "$ARTIFACT_DIR" --deadline <iso8601> \
