@@ -16,7 +16,7 @@ Do not delegate implementation just to avoid understanding the code yourself. Cl
 3. Inspect the worktree state so user changes are not mistaken for Codex changes
 4. Create the artifact directory, write the focused prompt, assign and register the invocation ID, and atomically initialize `invocation.json` using the shared lifecycle schema before authentication preflight
 5. Record the preflight outcome; dispatch only when it passes, using the supervised command below
-6. Capture the resulting worktree status and diff, inspect the changes and report, perform independent verification, and record verification and cleanup outcomes
+6. Confirm invocation-owned descendants have stopped, then capture the resulting worktree state, inspect the changes and report, perform independent verification, and record the outcomes
 7. After verification, claim and finish the learning hook from existing evidence, then present the implementation result
 
 Read the [Codex invocation lifecycle](../learn-to-use-codex/references/invocation-lifecycle.md) before preparing the invocation. Use the repository root as the working directory for all captures and execution below. Start with these artifact paths:
@@ -48,7 +48,7 @@ fi
 
 Before continuing, snapshot the actual contents of every preexisting untracked file Codex could modify, including files outside the requested target and ignored files within its writable scope. Consume `untracked-before.paths` as NUL-delimited paths, never newline-delimited text or shell word splitting. Preserve relative paths, bytes, file type, permissions and symlink targets without following symlinks; record content hashes and relevant metadata in a manifest outside the editable workspace. Verify the copies against the originals before dispatch. A filename list or ordinary Git diff is not a content backup. If files are changing concurrently, cannot be copied, or cannot be safely enumerated, stop before launching and resolve the incomplete baseline with the caller.
 
-`UNBORN` is valid only for a repository with no initial commit; investigate any other HEAD lookup failure before dispatch. Choose `TIMEOUT_SECONDS` and `TIMEOUT_RATIONALE` for the task, then use this single execution path. The conditional preserves the supervisor status and allows after-state capture under `set -e`:
+`UNBORN` is valid only for a repository with no initial commit; investigate any other HEAD lookup failure before dispatch. Choose `TIMEOUT_SECONDS` and `TIMEOUT_RATIONALE` for the task, then use this single execution path. The conditional preserves the supervisor status and permits cleanup handling under `set -e`:
 
 ```bash
 SUPERVISOR_EXIT=0
@@ -60,6 +60,13 @@ if python3 "$LIFECYCLE" supervise \
 else
   SUPERVISOR_EXIT=$?
 fi
+```
+
+Before capturing final after-state, inspect the supervisor's process and cleanup records. Use the shared lifecycle contract to identify invocation-owned descendants and servers by PID and matching start identity, stop only those attributable processes within the cleanup deadline, and verify they are gone. Never use a broad process-name kill. The helper's process-group result alone does not prove detached descendants have stopped; record the caller's cleanup outcome and supporting evidence in `invocation.json`.
+
+If ownership or cleanup remains unresolved, preserve stdout/stderr and partial changes, label any captured state as provisional, record the verification limitation, and report it through the learning hook and task result. Do not mark the implementation finally verified or treat that capture as a stable final snapshot. Capture final status, patches, HEAD, and untracked paths below only after cleanup is confirmed:
+
+```bash
 git status --short > "$ARTIFACT_DIR/status-after.txt"
 git diff --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/diff-after.patch"
 git diff --cached --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/staged-after.patch"
@@ -77,7 +84,7 @@ The tracked patches include binary bytes and bypass external diff/text conversio
 
 Compare the recorded HEAD values as well as the working-tree diffs. If both are commits and differ, inspect `git log <before>..<after>` and the corresponding commit/tree diffs: a clean worktree may hide changes Codex committed. If the baseline was `UNBORN`, inspect the new history including its root commit and the full resulting tree. Treat rewritten or unexpected history as a discrepancy and inspect it without resetting or force-pushing.
 
-Perform the independent checks below and persist `report_validity`, `verification_status`, and `verification_summary` before claiming the learning hook. If execution failed, inspect any partial changes and record what could and could not be verified. Confirm any required descendant cleanup using the shared contract; the supplied supervisor confirms only its original process group, not full-tree containment.
+Perform the independent checks below and persist `report_validity`, `verification_status`, and `verification_summary` before claiming the learning hook. If execution failed, inspect any partial changes and record what could and could not be verified.
 
 If the implementation should be constrained to specific files, say that explicitly in the prompt. If the repository has user changes already, tell Codex not to overwrite or revert unrelated work.
 
