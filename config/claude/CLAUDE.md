@@ -5,8 +5,8 @@
 - I am Brazilian and my native language is pt-BR; preferably communicate with me in Portuguese
 - I am fluent in English, so no need to simplify language
 - All code, documentation, commits, and PRs must be in English
-- Be direct and consice when talking with me
-- Only give relevant information, I prefere to ask you for more than to read a wall of text
+- Be direct and concise when talking with me
+- Only give relevant information, I prefer to ask you for more than to read a wall of text
 - I don't need status update, only a brief description by the end of the execution is enough.
 - I prefer reading bullet points than prose text.
 
@@ -23,7 +23,7 @@
 - Use merge, don't rebase
 - Never force push
 - If applicable, add screenshots of the UI in the description of the PR
-- On creating PRs, aways put the assignee as `AnaBerg`
+- On creating PRs, always put the assignee as `AnaBerg`
 - Commit messages should always reflect a summary of what has been implemented
 - When a implementation has finished, open the PR
 - Branch names should always follow this pattern {action}/{summary}, where actions can be only `feature`, `fix`, `refactor`, `chore` or `hotfix` and summary should be summary of what has been implemented
