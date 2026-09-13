@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,6 +88,46 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(module.hook_claim(self.claim_args(artifact)), 4)
         self.exercise(check)
 
+    def test_utc_z_deadlines_work_for_claim_existing_owner_and_completion(self):
+        def check(module, script, artifact):
+            args = self.claim_args(artifact)
+            args.deadline = args.deadline.replace("+00:00", "Z")
+            self.assertEqual(module.parse_deadline(args.deadline).utcoffset(), dt.timedelta(0))
+            self.assertEqual(module.hook_claim(args), 0)
+            self.assertEqual(module.hook_claim(self.claim_args(artifact, "competitor")), 2)
+            self.assertEqual(module.hook_complete(self.complete_args(artifact)), 0)
+        self.exercise(check)
+
+    def test_corrupted_done_marker_returns_contract_exit_code(self):
+        def check(module, script, artifact):
+            done = module.marker_paths(artifact, "regression")[2]
+            for data in ["{broken", "[]", "null"]:
+                done.write_text(data, encoding="utf-8")
+                args = argparse.Namespace(artifact_dir=str(artifact))
+                self.assertEqual(module.hook_status(args), 4)
+                result = subprocess.run([sys.executable, str(script), "hook-status", "--artifact-dir", str(artifact)],
+                                        capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 4)
+        self.exercise(check)
+
+    def test_execution_budget_starts_after_launch_and_matches_recorded_deadline(self):
+        def check(module, script, artifact):
+            child = Mock(pid=12345, returncode=0)
+            child.poll.side_effect = [None, 0]
+            args = self.supervise_args(artifact, "unused")
+            args.timeout = 1.0
+            with patch.object(module.subprocess, "Popen", return_value=child), \
+                    patch.object(module, "process_identity", return_value="identity"), \
+                    patch.object(module, "group_alive", return_value=False), \
+                    patch.object(module.time, "monotonic", side_effect=[0.0, 100.0, 100.25, 101.0]):
+                self.assertEqual(module.supervise(args), 0)
+            child.wait.assert_called_once_with(timeout=0.1)
+            record = module.load_json(artifact / "invocation.json")
+            elapsed = module.parse_deadline(record["deadline_at"]) - module.parse_deadline(record["dispatched_at"])
+            self.assertEqual(elapsed.total_seconds(), args.timeout)
+            self.assertEqual(record["duration_seconds"], 101.0)
+        self.exercise(check)
+
     def supervise_args(self, artifact, code):
         return argparse.Namespace(artifact_dir=str(artifact), stdin=None, timeout=0.4, grace=0.15,
                                   timeout_rationale="regression", command=[sys.executable, "-c", code])
@@ -135,14 +175,23 @@ class LifecycleTests(unittest.TestCase):
         def check(module, script, artifact):
             child_pid = None
             try:
-                code = "import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True); print(p.pid,flush=True); time.sleep(60)"
-                self.assertEqual(module.supervise(self.supervise_args(artifact, code)), 124)
-                child_pid = int((artifact / "stdout.log").read_text().strip())
+                code = "import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(15)'],start_new_session=True); print(p.pid,flush=True); time.sleep(15)"
+                args = self.supervise_args(artifact, code)
+                args.timeout = 3.0
+                return_code = module.supervise(args)
+                captured = (artifact / "stdout.log").read_text().strip()
+                self.assertTrue(captured.isdecimal(), "Detached fixture did not publish its PID before timeout")
+                child_pid = int(captured)
+                self.assertEqual(return_code, 124)
                 record = module.load_json(artifact / "invocation.json")
                 self.assertEqual(record["cleanup_outcome"], "unresolved")
                 self.assertIsNone(record["cleanup_confirmed_at"])
                 os.kill(child_pid, 0)
             finally:
+                if child_pid is None and (artifact / "stdout.log").exists():
+                    captured = (artifact / "stdout.log").read_text().strip()
+                    if captured.isdecimal():
+                        child_pid = int(captured)
                 if child_pid:
                     try:
                         os.kill(child_pid, signal.SIGKILL)

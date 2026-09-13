@@ -17,6 +17,8 @@ created_at, dispatched_at, ended_at, root_pid, process_group_id,
 process_start_identity, timeout_seconds, timeout_rationale, deadline_at,
 report_deadline_at, hook_deadline_at, exit_code, signal, timed_out,
 cancelled, owned_servers, cleanup_outcome, cleanup_confirmed_at,
+process_group_cleanup_outcome, cleanup_scope, cleanup_limitation,
+supervisor_error, duration_seconds, launch_error,
 report_validity, verification_status, verification_summary
 ```
 
@@ -34,6 +36,8 @@ Record exactly one of `passed`, `not_logged_in`, `missing_cli`, `network_error`,
 Run the learning hook for every blocked intended call after recording the outcome.
 
 ## Process supervision and deadlines
+
+Measure the execution budget from the monotonic timestamp captured immediately after process launch. Persist `dispatched_at` from the matching wall-clock timestamp and calculate `deadline_at` from that timestamp plus `timeout_seconds`. `duration_seconds` includes wrapper setup and cleanup. Hook deadlines accept timezone-aware ISO timestamps with either a UTC offset or trailing `Z`, including on Python 3.10.
 
 Use `../scripts/invocation_lifecycle.py` for process supervision and marker operations when local Python is available. Treat its generated `invocation.json`, stdout/stderr, exit state, cleanup state, and marker validation as the default implementation; an alternative must preserve the same observable contract.
 

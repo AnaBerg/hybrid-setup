@@ -22,6 +22,14 @@ def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
+def parse_deadline(value: str) -> dt.datetime:
+    """Accept ISO UTC Z on Python 3.10 as well as explicit UTC offsets."""
+    parsed = dt.datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    if parsed.tzinfo is None:
+        raise ValueError("Deadline must include a timezone")
+    return parsed
+
+
 def atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -159,15 +167,17 @@ def supervise(args: argparse.Namespace) -> int:
                 stderr=stderr_handle,
                 start_new_session=True,
             )
+            launched = time.monotonic()
+            dispatched_at = dt.datetime.now(dt.timezone.utc)
             identity = process_identity(process.pid)
             # start_new_session=True makes the child the process-group leader.
             # Using its PID avoids a race where a very short command exits before getpgid().
             process_group_id = process.pid
-            deadline = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=args.timeout)
+            deadline = dispatched_at + dt.timedelta(seconds=args.timeout)
             record.update(
                 {
                     "state": "dispatched",
-                    "dispatched_at": utc_now(),
+                    "dispatched_at": dispatched_at.isoformat(),
                     "root_pid": process.pid,
                     "process_group_id": process_group_id,
                     "process_start_identity": identity,
@@ -184,7 +194,7 @@ def supervise(args: argparse.Namespace) -> int:
                 while process.poll() is None:
                     if cancelled_signal:
                         raise InterruptedError
-                    remaining = args.timeout - (time.monotonic() - started)
+                    remaining = args.timeout - (time.monotonic() - launched)
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(command, args.timeout)
                     try:
@@ -297,7 +307,7 @@ def claim_locked(args: argparse.Namespace) -> int:
         return 3 if valid_done(done, invocation_id) else 4
     owner_pid = args.owner_pid
     identity = process_identity(owner_pid)
-    deadline = dt.datetime.fromisoformat(args.deadline)
+    deadline = parse_deadline(args.deadline)
     if deadline.tzinfo is None or deadline <= dt.datetime.now(dt.timezone.utc):
         raise ValueError("Hook deadline must be timezone-aware and in the future")
     if not identity or not process_matches(owner_pid, identity):
@@ -314,7 +324,7 @@ def claim_locked(args: argparse.Namespace) -> int:
     if exclusive_json(started, value):
         return 0
     existing = load_json(takeover if takeover.exists() else started)
-    deadline = dt.datetime.fromisoformat(existing["hook_deadline_at"])
+    deadline = parse_deadline(existing["hook_deadline_at"])
     alive = process_matches(existing.get("owner_pid", 0), existing.get("owner_start_identity"))
     if alive and dt.datetime.now(dt.timezone.utc) < deadline:
         return 2
@@ -338,7 +348,7 @@ def complete_locked(args: argparse.Namespace) -> int:
     if not active.exists():
         return 2
     owner = load_json(active)
-    deadline = dt.datetime.fromisoformat(owner["hook_deadline_at"])
+    deadline = parse_deadline(owner["hook_deadline_at"])
     if (owner.get("claim_token") != args.claim_token
             or not process_matches(owner.get("owner_pid", 0), owner.get("owner_start_identity"))
             or dt.datetime.now(dt.timezone.utc) >= deadline):
@@ -380,8 +390,11 @@ def hook_status(args: argparse.Namespace) -> int:
     _, _, done = marker_paths(artifact_dir, invocation_id)
     if not done.exists():
         return 1
-    value = load_json(done)
     if not valid_done(done, invocation_id):
+        return 4
+    try:
+        value = load_json(done)
+    except (OSError, ValueError):
         return 4
     print(json.dumps(value, sort_keys=True))
     return 0
