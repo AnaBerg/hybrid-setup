@@ -2,7 +2,7 @@
 
 Personal configuration for using Codex and Claude Code together. Each assistant can delegate implementation or review to the other, collect lessons from those calls, and run explicitly requested PR workflows.
 
-The repository contains portable copies of the global instruction files and the integration skills developed for this setup. It does not contain credentials, login sessions, conversation history, machine-specific MCP servers, `config.toml`, or Claude `settings.json`. Skills for unrelated projects, pet creation, and `share-plan` are intentionally excluded.
+The repository contains portable copies of the global instruction files and the integration skills developed for this setup. It does not contain credentials, login sessions, conversation history, machine-specific MCP servers, `config.toml`, or Claude `settings.json`.
 
 ## Included configuration
 
