@@ -34,20 +34,20 @@ Verify that the resolved artifact directory is outside the editable repository a
 
 Write the prompt and initialize the registered invocation record with all lifecycle fields, using `null` for unavailable values. Record `sandbox_mode: workspace-write` and `approval_policy: never` explicitly: this unattended workflow must permit scoped edits without waiting for interactive approval. Run and record authentication and capability preflight only after that record exists. If these policies are unavailable or an operation is denied, record the blocker and return to the caller; never disable the sandbox or silently widen permissions. A blocked preflight skips execution, records verification limitations, and proceeds to the learning hook without claiming implementation success.
 
-After a passing preflight, capture the baseline before dispatch:
+Classify HEAD before either capture phase, preserving each Git command's stderr and status in phase-specific artifacts. First require `git rev-parse --is-inside-work-tree` to succeed with `true`. Then run `git rev-parse --verify HEAD^{commit}`: success records its commit ID. On failure, write `UNBORN` only if `git symbolic-ref --quiet HEAD` succeeds with a valid `refs/heads/...` name (validated by `git check-ref-format`) and `git show-ref --verify --quiet <that exact ref>` exits exactly 1 with empty stderr, positively establishing an absent branch tip. All other outcomes, including corrupt objects/refs, permission errors and non-repositories, are classification failures, never `UNBORN`. Also record the symbolic branch; use `DETACHED` only when symbolic-ref exits 1 and HEAD was verified as a commit. Publish head/branch evidence only after successful classification; failures route to finalization.
+
+After a passing preflight, classify and record `head-before.txt` and `branch-before.txt` first. Set `BASE_BEFORE` to that captured commit ID, or to the empty-tree ID from `git mktree < /dev/null` for a positively classified unborn branch. Capture the baseline against this fixed reference:
 
 ```bash
 git status --short > "$ARTIFACT_DIR/status-before.txt"
 git diff --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/diff-before.patch"
-git diff --cached --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/staged-before.patch"
+git diff --cached --binary --no-ext-diff --no-textconv "$BASE_BEFORE" -- > "$ARTIFACT_DIR/staged-before.patch"
 git ls-files --others -z > "$ARTIFACT_DIR/untracked-before.paths"
 ```
 
-Classify HEAD separately for both `head-before.txt` and `head-after.txt`, preserving each Git command's stderr and status in phase-specific artifacts. First require `git rev-parse --is-inside-work-tree` to succeed with `true`. Then run `git rev-parse --verify HEAD^{commit}`: success records its commit ID. On failure, write `UNBORN` only if `git symbolic-ref --quiet HEAD` succeeds with a valid `refs/heads/...` name (validated by `git check-ref-format`) and `git show-ref --verify --quiet <that exact ref>` exits exactly 1 with empty stderr, positively establishing an absent branch tip. All other outcomes, including corrupt objects/refs, permission errors and non-repositories, are classification failures, never `UNBORN`. Publish a head file only after successful classification; any failed capture remains unavailable and routes to finalization.
-
 Before continuing, snapshot the actual contents of every preexisting untracked file Codex could modify, including files outside the requested target and ignored files within its writable scope. Consume `untracked-before.paths` as NUL-delimited paths, never newline-delimited text or shell word splitting. Preserve relative paths, bytes, file type, permissions and symlink targets without following symlinks; record content hashes and relevant metadata in a manifest outside the editable workspace. Verify the copies against the originals before dispatch. A filename list or ordinary Git diff is not a content backup. If files are changing concurrently, cannot be copied, or cannot be safely enumerated, stop before launching and resolve the incomplete baseline with the caller.
 
-Complete the baseline HEAD classification and snapshots before dispatch. Choose `TIMEOUT_SECONDS` and `TIMEOUT_RATIONALE` for the task, then use this single execution path. The conditional preserves the supervisor status for cleanup handling:
+After all snapshots and manifest checks, reclassify HEAD and symbolic branch immediately before dispatch and require both to match their captured values. Recheck index-tree and content/metadata consistency as well. A mismatch invalidates the baseline: retain its evidence under a distinct capture ID, and recapture at most once after concurrent activity has stopped; otherwise enter finalization without dispatch. These checks do not make capture atomic or detect every transient race; require a stable workspace and reject known concurrent mutation even when the final values match. Choose `TIMEOUT_SECONDS` and `TIMEOUT_RATIONALE` for the task, then use this single execution path. The conditional preserves the supervisor status for cleanup handling:
 
 ```bash
 SUPERVISOR_EXIT=0
@@ -65,14 +65,16 @@ Before capturing final after-state, inspect the supervisor's process and cleanup
 
 If ownership or cleanup remains unresolved, preserve stdout/stderr and partial changes, label any captured state as provisional, record the verification limitation, and go directly to finalization. Skip the final captures and all downstream comparisons/recovery that require them; do not open missing artifacts or mark the implementation finally verified. Capture final status, patches, HEAD, and untracked paths below only after cleanup is confirmed:
 
+First classify and record `head-after.txt` and `branch-after.txt`, and set `BASE_AFTER` to that captured commit or the empty tree for an unborn branch. Then capture:
+
 ```bash
 git status --short > "$ARTIFACT_DIR/status-after.txt"
 git diff --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/diff-after.patch"
-git diff --cached --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/staged-after.patch"
+git diff --cached --binary --no-ext-diff --no-textconv "$BASE_AFTER" -- > "$ARTIFACT_DIR/staged-after.patch"
 git ls-files --others -z > "$ARTIFACT_DIR/untracked-after.paths"
 ```
 
-Classify `head-after.txt` with the same algorithm. Continue with the comparisons below only if all required captures completed successfully; otherwise record which evidence is missing and enter finalization. Inspect `SUPERVISOR_EXIT`, available before/after state, and the supervisor's `invocation.json`, `stdout.log`, `stderr.log`, and candidate `report.md` when present. Compare every snapshotted untracked path against its original content hash and metadata, even if it is now tracked, staged or deleted, and inspect newly created files separately. When a mismatch affects unrelated user work, preserve both versions and investigate ownership; do not blindly restore over concurrent user changes.
+After all after-state captures and manifest checks, revalidate their HEAD/branch, index-tree and content/metadata consistency using the same stable-capture invariant and single-recapture bound. Unstable after-state remains provisional and cannot support final success. Continue with the comparisons below only if all required captures completed successfully; otherwise record missing or inconsistent evidence and enter finalization. Inspect `SUPERVISOR_EXIT`, available before/after state, and the supervisor's `invocation.json`, `stdout.log`, `stderr.log`, and candidate `report.md` when present. Compare every snapshotted untracked path against its original content hash and metadata, even if it is now tracked, staged or deleted, and inspect newly created files separately. When a mismatch affects unrelated user work, preserve both versions and investigate ownership; do not blindly restore over concurrent user changes.
 
 The tracked patches include binary bytes and bypass external diff/text conversion. To verify recovery, use a separate disposable checkout at the recorded baseline HEAD, apply the staged patch with `git apply --index` first, then apply the worktree patch with `git apply`, and compare both index and worktree contents. Reconstruct an unborn baseline in an empty temporary repository. Never replay these patches over the live workspace or concurrent user changes automatically.
 
