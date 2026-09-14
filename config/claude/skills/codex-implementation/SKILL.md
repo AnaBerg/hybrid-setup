@@ -17,7 +17,9 @@ Do not delegate implementation just to avoid understanding the code yourself. Cl
 4. Create the artifact directory, write the focused prompt, assign and register the invocation ID, and atomically initialize `invocation.json` using the shared lifecycle schema before authentication preflight
 5. Record the preflight outcome; dispatch only when it passes, using the supervised command below
 6. Confirm invocation-owned descendants have stopped, then capture the resulting worktree state, inspect the changes and report, perform independent verification, and record the outcomes
-7. After verification, claim and finish the learning hook from existing evidence, then present the implementation result
+7. Always finalize the intended invocation: record verification or its limitations, claim and finish the learning hook from existing evidence, then present the result
+
+Run these phases under caller-managed `try/finally` control flow. The shell blocks describe individual phases, not a script to concatenate under `set -e`. Capture every command's exit status and stderr. Any setup, baseline, cleanup, verification or recovery error must reach finalization; a baseline failure prevents dispatch, and an after-state or verification failure prevents a final-success claim. In `finally`, preserve available evidence, attempt the terminal record update, then attempt the learning hook even if recording failed. Report persistence and hook failures separately; never replace the original failure or silently skip analysis because an earlier phase raised.
 
 Read the [Codex invocation lifecycle](../learn-to-use-codex/references/invocation-lifecycle.md) before preparing the invocation. Use the repository root as the working directory for all captures and execution below. Start with these artifact paths:
 
@@ -39,16 +41,13 @@ git status --short > "$ARTIFACT_DIR/status-before.txt"
 git diff --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/diff-before.patch"
 git diff --cached --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/staged-before.patch"
 git ls-files --others -z > "$ARTIFACT_DIR/untracked-before.paths"
-if git rev-parse --verify HEAD > "$ARTIFACT_DIR/head-before.txt" 2>/dev/null; then
-  :
-else
-  printf '%s\n' UNBORN > "$ARTIFACT_DIR/head-before.txt"
-fi
 ```
+
+Classify HEAD separately for both `head-before.txt` and `head-after.txt`, preserving each Git command's stderr and status in phase-specific artifacts. First require `git rev-parse --is-inside-work-tree` to succeed with `true`. Then run `git rev-parse --verify HEAD^{commit}`: success records its commit ID. On failure, write `UNBORN` only if `git symbolic-ref --quiet HEAD` succeeds with a valid `refs/heads/...` name (validated by `git check-ref-format`) and `git show-ref --verify --quiet <that exact ref>` exits exactly 1 with empty stderr, positively establishing an absent branch tip. All other outcomes, including corrupt objects/refs, permission errors and non-repositories, are classification failures, never `UNBORN`. Publish a head file only after successful classification; any failed capture remains unavailable and routes to finalization.
 
 Before continuing, snapshot the actual contents of every preexisting untracked file Codex could modify, including files outside the requested target and ignored files within its writable scope. Consume `untracked-before.paths` as NUL-delimited paths, never newline-delimited text or shell word splitting. Preserve relative paths, bytes, file type, permissions and symlink targets without following symlinks; record content hashes and relevant metadata in a manifest outside the editable workspace. Verify the copies against the originals before dispatch. A filename list or ordinary Git diff is not a content backup. If files are changing concurrently, cannot be copied, or cannot be safely enumerated, stop before launching and resolve the incomplete baseline with the caller.
 
-`UNBORN` is valid only for a repository with no initial commit; investigate any other HEAD lookup failure before dispatch. Choose `TIMEOUT_SECONDS` and `TIMEOUT_RATIONALE` for the task, then use this single execution path. The conditional preserves the supervisor status and permits cleanup handling under `set -e`:
+Complete the baseline HEAD classification and snapshots before dispatch. Choose `TIMEOUT_SECONDS` and `TIMEOUT_RATIONALE` for the task, then use this single execution path. The conditional preserves the supervisor status for cleanup handling:
 
 ```bash
 SUPERVISOR_EXIT=0
@@ -64,21 +63,16 @@ fi
 
 Before capturing final after-state, inspect the supervisor's process and cleanup records. Use the shared lifecycle contract to identify invocation-owned descendants and servers by PID and matching start identity, stop only those attributable processes within the cleanup deadline, and verify they are gone. Never use a broad process-name kill. The helper's process-group result alone does not prove detached descendants have stopped; record the caller's cleanup outcome and supporting evidence in `invocation.json`.
 
-If ownership or cleanup remains unresolved, preserve stdout/stderr and partial changes, label any captured state as provisional, record the verification limitation, and report it through the learning hook and task result. Do not mark the implementation finally verified or treat that capture as a stable final snapshot. Capture final status, patches, HEAD, and untracked paths below only after cleanup is confirmed:
+If ownership or cleanup remains unresolved, preserve stdout/stderr and partial changes, label any captured state as provisional, record the verification limitation, and go directly to finalization. Skip the final captures and all downstream comparisons/recovery that require them; do not open missing artifacts or mark the implementation finally verified. Capture final status, patches, HEAD, and untracked paths below only after cleanup is confirmed:
 
 ```bash
 git status --short > "$ARTIFACT_DIR/status-after.txt"
 git diff --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/diff-after.patch"
 git diff --cached --binary --no-ext-diff --no-textconv > "$ARTIFACT_DIR/staged-after.patch"
 git ls-files --others -z > "$ARTIFACT_DIR/untracked-after.paths"
-if git rev-parse --verify HEAD > "$ARTIFACT_DIR/head-after.txt" 2>/dev/null; then
-  :
-else
-  printf '%s\n' UNBORN > "$ARTIFACT_DIR/head-after.txt"
-fi
 ```
 
-Inspect `SUPERVISOR_EXIT`, the captured before/after state, and the supervisor's `invocation.json`, `stdout.log`, `stderr.log`, and candidate `report.md`. Compare every snapshotted untracked path against its original content hash and metadata, even if it is now tracked, staged or deleted, and inspect newly created files separately. When a mismatch affects unrelated user work, preserve both versions and investigate ownership; do not blindly restore over concurrent user changes.
+Classify `head-after.txt` with the same algorithm. Continue with the comparisons below only if all required captures completed successfully; otherwise record which evidence is missing and enter finalization. Inspect `SUPERVISOR_EXIT`, available before/after state, and the supervisor's `invocation.json`, `stdout.log`, `stderr.log`, and candidate `report.md` when present. Compare every snapshotted untracked path against its original content hash and metadata, even if it is now tracked, staged or deleted, and inspect newly created files separately. When a mismatch affects unrelated user work, preserve both versions and investigate ownership; do not blindly restore over concurrent user changes.
 
 The tracked patches include binary bytes and bypass external diff/text conversion. To verify recovery, use a separate disposable checkout at the recorded baseline HEAD, apply the staged patch with `git apply --index` first, then apply the worktree patch with `git apply`, and compare both index and worktree contents. Reconstruct an unborn baseline in an empty temporary repository. Never replay these patches over the live workspace or concurrent user changes automatically.
 
@@ -135,7 +129,7 @@ Run targeted verification whenever practical. If verification fails, either fix 
 
 Every intended Codex invocation from this skill — success, error, timeout, cancellation, empty or malformed report, cleanup failure, or a preflight that blocked the call — uses the shared lifecycle contract and requires exactly one `$learn-to-use-codex` analysis.
 
-The workflow above is the only model execution path in this skill. After its independent verification step (or after recording a blocked preflight and its verification limitations), use the same artifact directory for the learning hook:
+The workflow above is the only model execution path in this skill. This section is its unconditional finalization path, including blocked setup/preflight and failed capture, cleanup, verification or recovery. Record the actual outcome and verification limitations using available evidence, then use the same artifact directory for the learning hook. If artifact persistence itself failed, preserve the evidence and run the analysis in the caller's context, reporting that durable completion could not be recorded. An existing valid completion suppresses duplicate analysis; a hook failure is reported separately and does not turn an implementation failure into success:
 
 ```bash
 HOOK_TOKEN="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
@@ -148,7 +142,7 @@ python3 "$LIFECYCLE" hook-complete --artifact-dir "$ARTIFACT_DIR" \
   --result "$ARTIFACT_DIR/learning-result.md" --outcome <class> --claim-token "$HOOK_TOKEN"
 ```
 
-Each retry is a new linked `invocation_id`. Run the hook exactly once per intended invocation, after independent verification. Keep learning output in `learning-result.md`, never appended to the Codex report, and never invoke Codex, another model, a subagent, or `review-loop` to perform the analysis. Hook failure is recorded separately and never changes the Codex result or this skill's reported outcome. Pending learning proposals do not block the original task and are applied only after explicit user approval of the specific proposal.
+Each retry is a new linked `invocation_id`. Run the hook exactly once per intended invocation, after independent verification or recording why verification was unavailable. Keep learning output in `learning-result.md`, never appended to the Codex report, and never invoke Codex, another model, a subagent, or `review-loop` to perform the analysis. Hook failure is recorded separately and never changes the Codex result or this skill's reported outcome. Pending learning proposals do not block the original task and are applied only after explicit user approval of the specific proposal.
 
 ## Reporting back
 
