@@ -1,0 +1,6 @@
+interface:
+  display_name: "Should I Merge"
+  short_description: "Pair Astra and Fable to assess a PR"
+  default_prompt: "Use $should-i-merge to assess whether this pull request should be merged."
+policy:
+  allow_implicit_invocation: false

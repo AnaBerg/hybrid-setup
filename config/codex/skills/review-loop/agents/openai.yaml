@@ -1,0 +1,6 @@
+interface:
+  display_name: "Review Loop"
+  short_description: "Run paired Codex and Claude review loops"
+  default_prompt: "Use $review-loop to review the current implementation, validate findings, and assess whether it is technically mergeable."
+policy:
+  allow_implicit_invocation: false
